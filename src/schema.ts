@@ -18,6 +18,9 @@ const resolvers = {
     }
 }
 
+/**
+ * Combination of the GraphQL SDL and the resolvers
+ */
 export const schema = makeExecutableSchema({
     resolvers: [resolvers],
     typeDefs: [typeDefinitions],
