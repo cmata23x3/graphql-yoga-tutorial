@@ -1,5 +1,6 @@
 import { makeExecutableSchema } from "@graphql-tools/schema"
-import { url } from "inspector"
+import type { GraphQLContext } from "./context";
+import type { Link } from "@prisma/client";
 
 /* GraphQL schema definition language (SDL)
 *  This descibes what data can be retrieved from the schema
@@ -22,41 +23,30 @@ const typeDefinitions = `
 `
 
 /**
- * Resolvers are used for resolving the data. 
+ * Resolvers are used for resolving the data from the databases for Query operations 
+ * and for storing data on Mutation operations
  */
-type Link = {
-    id: string
-    url: string
-    description: string
-}
-
-const links: Link[] = [
-    {
-        id: 'link-0',
-        url: 'https://graphql-yoga.com',
-        description: 'The easiest way of setting up a GraphQL server',
-    }
-]
-
 const resolvers = {
     Query: {
         info: () => `This is the API of a Hackernews Clone`,
-        feed: () => links
+        feed: (parent: unknown, args: {}, context: GraphQLContext) =>
+            context.prisma.link.findMany()
     },
     Mutation: {
-        postLink: (parent: unknown, args: { description: string; url: string }) => {
-            let idCount = links.length
-            const link: Link = {
-                id: `link-${idCount}`,
-                description: args.description,
-                url: args.url
-            }
-
-            links.push(link)
-
-            return link
-        }
-    }
+        async postLink(
+            parent: unknown,
+            args: { description: string; url: string },
+            context: GraphQLContext
+        ) {
+            const newLink = await context.prisma.link.create({
+                data: {
+                    url: args.url,
+                    description: args.description,
+                }
+        })
+            return newLink  
+        },
+    },
 }
 
 /**
