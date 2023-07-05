@@ -1,6 +1,8 @@
 import { makeExecutableSchema } from "@graphql-tools/schema"
+import { GraphQLError } from "graphql"
 import type { GraphQLContext } from "./context";
 import type { Link } from "@prisma/client";
+import { PrismaClientKnownRequestError } from "@prisma/client/runtime/library";
 
 /* GraphQL schema definition language (SDL)
 *  This descibes what data can be retrieved from the schema
@@ -31,6 +33,22 @@ const typeDefinitions = `
         link: Link
     }
 `
+
+const parseIntSafe = (value: string): number | null => {
+    if (/^(\d+)$/.test(value)) {
+        return parseInt(value, 10)
+    }
+    return null
+}
+
+const isValidUrl = (value: string): boolean => {
+    try {
+        new URL(value)
+        return true
+    } catch (err) {
+        return false
+    }
+}
 
 /**
  * Resolvers are used for resolving the data from the databases for Query operations 
@@ -79,6 +97,19 @@ const resolvers = {
             args: { description: string; url: string },
             context: GraphQLContext
         ) {
+            // Check that the description is not an empty string
+            if (!args.description) {
+                return Promise.reject(
+                    new GraphQLError("Cannot create link with an empty description")
+                )
+            }
+
+            if (!isValidUrl(args.url)) {
+                return Promise.reject(
+                    new GraphQLError("Cannot create link with an invalid url")
+                )
+            }
+
             const newLink = await context.prisma.link.create({
                 data: {
                     url: args.url,
@@ -92,12 +123,44 @@ const resolvers = {
             args: { linkId: string; body: string },
             context: GraphQLContext,
         ) {
-            const newComment = await context.prisma.comment.create({
-                data: {
-                    linkId: parseInt(args.linkId),
-                    body: args.body,
-                }
-            })
+            // Check that the linkId is a valid integer
+            const linkId = parseIntSafe(args.linkId)
+            if (linkId === null) {
+                return Promise.reject(
+                    new GraphQLError(
+                        `Cannot post comment on non-existing link with id ${args.linkId}`
+                    )
+                )
+            }
+
+            // Check that the comment body is not an empty string
+            if (!args.body) {
+                return Promise.reject(
+                    new GraphQLError("Cannot post an empty comment")
+                )
+            }
+
+            const newComment = await context.prisma.comment
+                .create({
+                    data: {
+                        linkId: parseInt(args.linkId),
+                        body: args.body,
+                    }
+                })
+                .catch((err: unknown) => {
+                    // Handle case if the linkId doesn't exist
+                    if (
+                        err instanceof PrismaClientKnownRequestError &&
+                        err.code === 'P2003'
+                    ) {
+                        return Promise.reject(
+                            new GraphQLError(
+                                `Cannot post comment on non-existing link with id ${args.linkId}`
+                            )
+                        )
+                    }
+                    return Promise.reject(err)
+                })
             return newComment
         }
     },
