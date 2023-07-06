@@ -64,7 +64,12 @@ const applyTakeConstraints = (params: {
 }
 
 const applySkipConstraints = (value: number) => {
-    return (value < -1) ? 0 : value  
+    if (value <= -1) {
+        throw new GraphQLError(
+            `'skip' argument value '${value}' cannot be a negative.`
+        )
+    }
+    return value 
 } 
 
 /**
