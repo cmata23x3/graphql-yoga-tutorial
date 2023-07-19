@@ -1,8 +1,11 @@
 import { makeExecutableSchema } from "@graphql-tools/schema"
 import { GraphQLError } from "graphql"
 import type { GraphQLContext } from "./context";
-import type { Link } from "@prisma/client";
+import type { Link, User } from "@prisma/client";
 import { PrismaClientKnownRequestError } from "@prisma/client/runtime/library";
+import { compare, hash } from "bcryptjs";
+import { sign } from "jsonwebtoken";
+import { APP_SECRET } from "./auth";
 
 /* GraphQL schema definition language (SDL)
 *  This descibes what data can be retrieved from the schema
@@ -10,6 +13,7 @@ import { PrismaClientKnownRequestError } from "@prisma/client/runtime/library";
 const typeDefinitions = `
     type Query {
         info: String!
+        me: User!
         feed(filterNeedle: String, skip: Int, take: Int): [Link!]!
         comment(id: ID!): Comment
         link(id: ID!): Link
@@ -18,6 +22,8 @@ const typeDefinitions = `
     type Mutation {
         postLink(url: String!, description: String!): Link!
         postCommentOnLink(linkId: ID!, body: String!): Comment!
+        signup(email: String!, password: String!, name: String!): AuthPayload
+        login(email: String!, password: String!): AuthPayload
     }
 
     type Link {
@@ -25,12 +31,25 @@ const typeDefinitions = `
         description: String!
         url: String!
         comments: [Comment!]!
+        postedBy: User
     }
 
     type Comment {
         id: ID!
         body: String!
         link: Link
+    }
+
+    type AuthPayload {
+        token: String
+        user: User
+    }
+
+    type User {
+        id: ID!
+        name: String!
+        email: String!
+        links: [Link!]!
     }
 `
 
@@ -79,6 +98,16 @@ const applySkipConstraints = (value: number) => {
 const resolvers = {
     Query: {
         info: () => `This is the API of a Hackernews Clone`,
+        me(
+            parent: unknown,
+            args: {},
+            context: GraphQLContext
+        ) {
+            if (context.currentUser === null) {
+                throw new Error('Unauthenticated')
+            }
+            return context.currentUser
+        },
         async feed(
             parent: unknown,
             args: { filterNeedle?: string, skip?: number, take?: number,  },
@@ -129,6 +158,22 @@ const resolvers = {
         }
     },
     Link: {
+        id: (parent: Link) => parent.id,
+        description: (parent: Link) => parent.description,
+        url: (parent: Link) => parent.url,
+        postedBy(
+            parent: Link,
+            args: {},
+            context: GraphQLContext,
+        ) {
+            if (!parent.postedById) {
+                return null
+            }
+
+            return context.prisma.link
+                .findUnique({ where: { id: parent.id }})
+                .postedBy()
+        },
         comments(parent: Link, args: {}, context: GraphQLContext) {
             return context.prisma.comment.findMany({
                 where: {
@@ -137,12 +182,19 @@ const resolvers = {
             })
         }
     },
+    User: {
+        links: (parent: User, args: {}, context: GraphQLContext) =>
+            context.prisma.user.findUnique({ where: { id: parent.id }}).links()
+    },
     Mutation: {
         async postLink(
             parent: unknown,
             args: { description: string; url: string },
             context: GraphQLContext
         ) {
+            if (context.currentUser === null) {
+                throw new Error('Unauthenticated')
+            }
             // Check that the description is not an empty string
             if (!args.description) {
                 return Promise.reject(
@@ -160,6 +212,7 @@ const resolvers = {
                 data: {
                     url: args.url,
                     description: args.description,
+                    postedBy: { connect: { id: context.currentUser.id }}
                 }
             })
             return newLink  
@@ -208,6 +261,37 @@ const resolvers = {
                     return Promise.reject(err)
                 })
             return newComment
+        },
+        async signup(
+            parent: unknown,
+            args: { email: string; password: string; name: string },
+            context: GraphQLContext
+        ) {
+            const password = await hash(args.password, 10)
+            const user = await context.prisma.user.create({
+                data: { ...args, password }
+            })
+            const token = sign({ userId: user.id}, APP_SECRET)
+
+            return { token, user }
+        },
+        async login(
+            parent: unknown,
+            args: { email: string, password: string },
+            context: GraphQLContext
+        ) {
+            const user = await context.prisma.user.findUnique({
+                where: { email: args.email }
+            })
+            if (!user) {
+                throw new Error('No such user found')
+            }
+            const valid = await compare(args.password, user.password)
+            if (!valid) {
+                throw new Error('Invalid password')
+            }
+            const token = sign({ userId: user.id }, APP_SECRET)
+            return { token, user }
         }
     },
 }
