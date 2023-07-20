@@ -24,10 +24,12 @@ const typeDefinitions = `
         postCommentOnLink(linkId: ID!, body: String!): Comment!
         signup(email: String!, password: String!, name: String!): AuthPayload
         login(email: String!, password: String!): AuthPayload
+        vote(linkId: ID!): Vote
     }
 
     type Subscription {
         newLink: Link!
+        newVote: Vote!
     }
 
     type Link {
@@ -36,6 +38,7 @@ const typeDefinitions = `
         url: String!
         comments: [Comment!]!
         postedBy: User
+        votes: [Vote!]!
     }
 
     type Comment {
@@ -54,6 +57,12 @@ const typeDefinitions = `
         name: String!
         email: String!
         links: [Link!]!
+    }
+
+    type Vote {
+        id: ID!
+        link: Link!
+        user: User!
     }
 `
 
@@ -184,11 +193,19 @@ const resolvers = {
                     linkId: parent.id,
                 }
             })
-        }
+        },
+        votes: (parent: Link, args: {}, context: GraphQLContext) =>
+            context.prisma.link.findUnique({ where: { id: parent.id } }).votes()
     },
     User: {
         links: (parent: User, args: {}, context: GraphQLContext) =>
             context.prisma.user.findUnique({ where: { id: parent.id }}).links()
+    },
+    Vote: {
+        link: (parent: User, args: {}, context: GraphQLContext) =>
+            context.prisma.vote.findUnique({ where: { id: parent.id }}).link(),
+        user: (parent: User, args: {}, context: GraphQLContext) =>
+            context.prisma.vote.findUnique({ where: { id: parent.id }}).user()
     },
     Mutation: {
         async postLink(
@@ -300,11 +317,45 @@ const resolvers = {
             }
             const token = sign({ userId: user.id }, APP_SECRET)
             return { token, user }
+        },
+        async vote(parent: unknown, args: { linkId: string }, context: GraphQLContext) {
+            if (!context.currentUser) {
+                throw new GraphQLError('You must login in order to use upvote')
+            }
+            const userId = context.currentUser.id
+            
+            const vote = await context.prisma.vote.findUnique({
+                where: {
+                    linkId_userId: {
+                        linkId: Number(args.linkId),
+                        userId,
+                    }
+                }
+            })
+
+            if (vote !== null) {
+                throw new Error(`Already voted for link: ${args.linkId}`)
+            }
+
+            const newVote = await context.prisma.vote.create({
+                data: {
+                    user: { connect: { id: userId } },
+                    link: { connect: { id: Number(args.linkId) } }
+                }
+            })
+
+            context.pubSub.publish('newVote', { newVote })
+
+            return newVote
         }
     },
     Subscription: {
         newLink: {
             subscribe: (parent: unknown, args: {}, context: GraphQLContext) => context.pubSub.subscribe('newLink')
+        },
+        newVote: {
+            subscribe: (parent: unknown, args: {}, context: GraphQLContext) =>
+                context.pubSub.subscribe('newVote')
         }
     },
 }
