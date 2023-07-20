@@ -26,6 +26,10 @@ const typeDefinitions = `
         login(email: String!, password: String!): AuthPayload
     }
 
+    type Subscription {
+        newLink: Link!
+    }
+
     type Link {
         id: ID!
         description: String!
@@ -215,6 +219,10 @@ const resolvers = {
                     postedBy: { connect: { id: context.currentUser.id }}
                 }
             })
+
+            // Publish events to anyone subscribed
+            context.pubSub.publish('newLink', { newLink })
+
             return newLink  
         },
         async postCommentOnLink(
@@ -292,6 +300,11 @@ const resolvers = {
             }
             const token = sign({ userId: user.id }, APP_SECRET)
             return { token, user }
+        }
+    },
+    Subscription: {
+        newLink: {
+            subscribe: (parent: unknown, args: {}, context: GraphQLContext) => context.pubSub.subscribe('newLink')
         }
     },
 }
